@@ -147,6 +147,16 @@ def skew_t_pdf_asymmetric(x, center, spread, left_tail, right_tail, lean):
 
     return np.array(pdf_vals)
 
+def get_interval_description(interval_key):
+    """Convert interval key to readable description"""
+    interval_map = {
+        '15 minutes': '15-minute',
+        '30 minutes': '30-minute',
+        '1 hour': 'hourly',
+        '1 day': 'daily'
+    }
+    return interval_map.get(interval_key, interval_key)
+
 def find_quantile(target_prob, center, spread, left_tail, right_tail, lean, is_above=False):
     """Find the price threshold that corresponds to a given probability.
     If is_above=True, finds the threshold where P(X > threshold) = target_prob
@@ -947,15 +957,18 @@ else:
                 name='P(Above)'
             ))
 
-# Dynamic title based on probability type
+# Dynamic title based on probability type with context
+interval_desc = get_interval_description(selected_interval)
+data_context = f"Based on distribution of {n_points} recent {interval_desc} prices for {ticker}"
+
 if prob_type == "Below Threshold":
-    title_text = f'P(Price < ${threshold:.1f}) = {prob_below:.1%} | Data since {start_date.strftime("%Y-%m-%d %H:%M")}'
+    title_text = f'{data_context}: Probability within distribution < ${threshold:.1f} is {prob_below:.1%}'
 elif prob_type == "Above Threshold":
-    title_text = f'P(Price > ${threshold:.1f}) = {prob_above:.1%} | Data since {start_date.strftime("%Y-%m-%d %H:%M")}'
+    title_text = f'{data_context}: Probability within distribution > ${threshold:.1f} is {prob_above:.1%}'
 elif prob_type == "Between Range":
-    title_text = f'P(${threshold_low:.1f} < Price < ${threshold_high:.1f}) = {prob_between:.1%} | Since {start_date.strftime("%Y-%m-%d %H:%M")}'
+    title_text = f'{data_context}: Probability within distribution between ${threshold_low:.1f}-${threshold_high:.1f} is {prob_between:.1%}'
 else:  # Show Both
-    title_text = f'P < ${threshold:.1f} = {prob_below:.1%} | P > ${threshold:.1f} = {prob_above:.1%} | Since {start_date.strftime("%Y-%m-%d %H:%M")}'
+    title_text = f'{data_context}: Below ${threshold:.1f}: {prob_below:.1%} | Above: {prob_above:.1%}'
 
 fig.update_layout(
     title=title_text,
@@ -1002,31 +1015,39 @@ st.plotly_chart(fig, use_container_width=True)
 col1, col2 = st.columns(2)
 
 with col1:
-    st.subheader("🎯 Your Current Belief Settings")
+    st.subheader("🎯 Distribution Characteristics")
+
+    # Add context about what this represents
+    interval_desc = get_interval_description(selected_interval)
+    st.caption(f"Fitted to {n_points} recent {interval_desc} {ticker} prices")
 
     interpretation = []
-    interpretation.append(f"• Price centers around **${center:.1f}**")
+    interpretation.append(f"• Distribution centers around **${center:.1f}**")
     interpretation.append(f"• Typical range: **${center-spread:.1f}** to **${center+spread:.1f}**")
 
     if left_tail < right_tail:
-        interpretation.append("• **Higher crash risk** than moon potential (left tail fatter)")
+        interpretation.append("• **Heavier left tail** (more downside outliers in this distribution)")
     elif right_tail < left_tail:
-        interpretation.append("• **Higher moon potential** than crash risk (right tail fatter)")
+        interpretation.append("• **Heavier right tail** (more upside outliers in this distribution)")
     else:
-        interpretation.append("• **Symmetric tail risks**")
+        interpretation.append("• **Symmetric tails** (balanced outlier risk)")
 
     if lean > 1.1:
-        interpretation.append("• **Bullish lean** (distribution tilts right)")
+        interpretation.append("• **Right-skewed** distribution")
     elif lean < 0.9:
-        interpretation.append("• **Bearish lean** (distribution tilts left)")
+        interpretation.append("• **Left-skewed** distribution")
     else:
-        interpretation.append("• **Neutral lean**")
+        interpretation.append("• **Symmetric** distribution")
 
     for item in interpretation:
         st.markdown(item)
 
+    # Add disclaimer
+    st.info("📖 **Note**: These probabilities describe the fitted distribution based on recent historical data, not predictions about future prices.")
+
 with col2:
-    st.subheader("📊 Key Probability Levels")
+    st.subheader("📊 Probability Within Distribution")
+    st.caption("Probabilities of prices existing within the fitted distribution")
 
     # Calculate probabilities for important levels
     important_levels = sorted([
@@ -1113,6 +1134,7 @@ if 'assumptions' in st.session_state and st.session_state.assumptions:
 # Display key probabilities
 if prob_type == "Between Range":
     col3, col4, col5, col6 = st.columns(4)
+    interval_desc = get_interval_description(selected_interval)
 
     with col3:
         st.metric(
@@ -1123,26 +1145,29 @@ if prob_type == "Between Range":
 
     with col4:
         st.metric(
-            label=f"P(< ${threshold_low:.1f})",
+            label=f"Below ${threshold_low:.1f}",
             value=f"{prob_below:.1%}",
-            delta=None
+            delta=None,
+            help=f"Within the fitted {interval_desc} distribution"
         )
 
     with col5:
         st.metric(
-            label=f"P(${threshold_low:.1f} - ${threshold_high:.1f})",
+            label=f"Between ${threshold_low:.1f}-${threshold_high:.1f}",
             value=f"{prob_between:.1%}",
-            delta=None
+            delta=None,
+            help=f"Within the fitted {interval_desc} distribution"
         )
 
     with col6:
         st.metric(
-            label=f"P(> ${threshold_high:.1f})",
+            label=f"Above ${threshold_high:.1f}",
             value=f"{prob_above:.1%}",
             delta=None
         )
 else:
     col3, col4, col5 = st.columns(3)
+    interval_desc = get_interval_description(selected_interval)
 
     with col3:
         st.metric(
@@ -1153,14 +1178,15 @@ else:
 
     with col4:
         st.metric(
-            label=f"P(Price < ${threshold:.1f})",
+            label=f"Within distribution < ${threshold:.1f}",
             value=f"{prob_below:.1%}",
-            delta=None
+            delta=None,
+            help=f"Probability of a price below ${threshold:.1f} within the fitted {interval_desc} distribution"
         )
 
     with col5:
         st.metric(
-            label=f"P(Price > ${threshold:.1f})",
+            label=f"Within distribution > ${threshold:.1f}",
             value=f"{prob_above:.1%}",
             delta=None
         )
