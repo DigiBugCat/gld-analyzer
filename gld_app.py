@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 from scipy import stats
+from scipy.optimize import minimize, differential_evolution
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import time
@@ -145,6 +146,40 @@ def skew_t_pdf_asymmetric(x, center, spread, left_tail, right_tail, lean):
         pdf_vals.append(pdf_val)
 
     return np.array(pdf_vals)
+
+def find_quantile(target_prob, center, spread, left_tail, right_tail, lean, is_above=False):
+    """Find the price threshold that corresponds to a given probability.
+    If is_above=True, finds the threshold where P(X > threshold) = target_prob
+    If is_above=False, finds the threshold where P(X < threshold) = target_prob
+    """
+    from scipy.optimize import minimize_scalar
+
+    # Generate x range for integration
+    x_min = center - 10 * spread
+    x_max = center + 10 * spread
+
+    def calc_prob_below(threshold):
+        x_range = np.linspace(x_min, threshold, 1000)
+        pdf_vals = skew_t_pdf_asymmetric(x_range, center, spread, left_tail, right_tail, lean)
+        prob = np.trapz(pdf_vals, x_range)
+        return min(max(prob, 0), 1)
+
+    def objective(threshold):
+        prob_below = calc_prob_below(threshold)
+        if is_above:
+            actual_prob = 1 - prob_below
+        else:
+            actual_prob = prob_below
+        return abs(actual_prob - target_prob)
+
+    # Use optimization to find the threshold
+    result = minimize_scalar(objective, bounds=(x_min, x_max), method='bounded')
+
+    if result.success:
+        return result.x
+    else:
+        # Fallback: simple approximation
+        return center + (spread if is_above else -spread)
 
 # Sidebar for controls
 st.sidebar.header("🎯 Stock Selection")
@@ -371,6 +406,265 @@ n_points = st.sidebar.slider(
     key='n_points_slider'
 )
 
+# Inverse Probability Calculator Section
+st.sidebar.markdown("---")
+st.sidebar.header("🔮 Inverse Probability Calculator")
+
+with st.sidebar.expander("📖 How it works", expanded=False):
+    st.markdown("""
+    **Find Threshold**: Given a probability, find the corresponding price threshold.
+
+    **Example**: "What price has only 15% chance of being exceeded?"
+    """)
+
+# Mode selector
+inverse_mode = st.sidebar.radio(
+    "Calculator Mode",
+    ["Find Threshold from Probability", "Fit Distribution to Assumption"],
+    index=0,
+    key="inverse_mode"
+)
+
+if inverse_mode == "Find Threshold from Probability":
+    # Input desired probability
+    col_prob, col_dir = st.sidebar.columns([2, 1])
+    with col_prob:
+        desired_prob = st.number_input(
+            "Desired Probability (%)",
+            min_value=0.1,
+            max_value=99.9,
+            value=15.0,
+            step=0.5,
+            key='desired_prob'
+        ) / 100.0
+
+    with col_dir:
+        prob_direction = st.selectbox(
+            "Direction",
+            ["Above", "Below"],
+            index=0,
+            key='prob_direction'
+        )
+
+    # Calculate button
+    if st.sidebar.button("🎯 Calculate Threshold", type="secondary", use_container_width=True):
+        is_above = (prob_direction == "Above")
+        calculated_threshold = find_quantile(
+            desired_prob, center, spread, left_tail, right_tail, lean, is_above
+        )
+        st.session_state['calculated_threshold'] = calculated_threshold
+        st.session_state['calc_prob'] = desired_prob
+        st.session_state['calc_dir'] = prob_direction
+
+    # Display result if calculated
+    if 'calculated_threshold' in st.session_state:
+        st.sidebar.success(
+            f"💡 **Result**: {st.session_state['calc_prob']*100:.1f}% chance {st.session_state['calc_dir'].lower()} **${st.session_state['calculated_threshold']:.2f}**"
+        )
+
+        # Option to use as threshold
+        col1, col2 = st.sidebar.columns(2)
+        with col1:
+            if st.button("📌 Use as Threshold", use_container_width=True):
+                st.session_state['threshold_slider'] = st.session_state['calculated_threshold']
+                st.rerun()
+        with col2:
+            if st.button("🗑 Clear", use_container_width=True):
+                del st.session_state['calculated_threshold']
+                del st.session_state['calc_prob']
+                del st.session_state['calc_dir']
+                st.rerun()
+
+else:  # Fit Distribution to Assumption mode
+    st.sidebar.markdown("""
+    **Set your probability assumptions and fit the distribution to match them.**
+    """)
+
+    # Initialize session state for assumptions
+    if 'assumptions' not in st.session_state:
+        st.session_state.assumptions = []
+
+    # Add new assumption
+    st.sidebar.subheader("Add Assumption")
+    col_val, col_prob = st.sidebar.columns(2)
+    with col_val:
+        new_threshold = st.number_input(
+            "Price ($)",
+            min_value=price_min - 20,
+            max_value=price_max + 20,
+            value=float(center),
+            step=0.5,
+            key='new_threshold'
+        )
+    with col_prob:
+        new_prob = st.number_input(
+            "Prob Above (%)",
+            min_value=0.1,
+            max_value=99.9,
+            value=20.0,
+            step=0.5,
+            key='new_prob'
+        )
+
+    if st.sidebar.button("➕ Add Assumption", use_container_width=True):
+        st.session_state.assumptions.append({
+            'threshold': new_threshold,
+            'prob_above': new_prob / 100.0
+        })
+
+    # Display current assumptions
+    if st.session_state.assumptions:
+        st.sidebar.subheader("Current Assumptions")
+        for i, assumption in enumerate(st.session_state.assumptions):
+            col1, col2 = st.sidebar.columns([3, 1])
+            with col1:
+                st.markdown(f"{assumption['prob_above']*100:.1f}% above ${assumption['threshold']:.1f}")
+            with col2:
+                if st.button("❌", key=f"del_{i}"):
+                    st.session_state.assumptions.pop(i)
+                    st.rerun()
+
+        # Parameters to fit
+        st.sidebar.subheader("Parameters to Fit")
+        fit_center = st.sidebar.checkbox("Center", value=True, key='fit_center')
+        fit_spread = st.sidebar.checkbox("Spread", value=True, key='fit_spread')
+        fit_tails = st.sidebar.checkbox("Tail Parameters", value=False, key='fit_tails')
+        fit_lean = st.sidebar.checkbox("Lean", value=False, key='fit_lean')
+
+        # Fit button
+        if st.sidebar.button("🎯 Fit Distribution", type="primary", use_container_width=True):
+            with st.spinner("Fitting distribution..."):
+                # Tolerance for "close enough" - 3% error is acceptable
+                TOLERANCE = 0.03
+
+                # Quick feasibility check
+                def quick_check():
+                    """Quick check if assumptions are reasonable"""
+                    for assumption in st.session_state.assumptions:
+                        # Check if threshold is within reasonable range
+                        if assumption['threshold'] < center - 5*spread or assumption['threshold'] > center + 5*spread:
+                            if assumption['prob_above'] > 0.3:  # Expecting high prob for extreme value
+                                return False
+                        # Check for contradictory assumptions
+                        for other in st.session_state.assumptions:
+                            if other != assumption:
+                                if other['threshold'] > assumption['threshold'] and other['prob_above'] > assumption['prob_above']:
+                                    return False  # Contradiction: higher threshold should have lower prob_above
+                    return True
+
+                if not quick_check():
+                    st.sidebar.warning("⚠️ Assumptions might be contradictory or unrealistic. Trying anyway...")
+
+                # Objective function optimized for speed
+                def objective(params):
+                    idx = 0
+                    test_center = params[idx] if fit_center else center
+                    idx += 1 if fit_center else 0
+                    test_spread = params[idx] if fit_spread else spread
+                    idx += 1 if fit_spread else 0
+                    test_left_tail = params[idx] if fit_tails else left_tail
+                    idx += 1 if fit_tails else 0
+                    test_right_tail = params[idx] if fit_tails else right_tail
+                    idx += 1 if fit_tails else 0
+                    test_lean = params[idx] if fit_lean else lean
+
+                    max_error = 0
+                    total_error = 0
+                    for assumption in st.session_state.assumptions:
+                        # Use fewer points for faster calculation
+                        x_range_test = np.linspace(assumption['threshold'], test_center + 10*test_spread, 200)
+                        pdf_vals_test = skew_t_pdf_asymmetric(x_range_test, test_center, test_spread,
+                                                             test_left_tail, test_right_tail, test_lean)
+                        actual_prob_above = np.trapz(pdf_vals_test, x_range_test)
+                        actual_prob_above = min(max(actual_prob_above, 0), 1)
+
+                        error = abs(actual_prob_above - assumption['prob_above'])
+                        max_error = max(max_error, error)
+                        total_error += error ** 2
+
+                    # Return early if close enough
+                    if max_error <= TOLERANCE:
+                        return 0  # Signal that we found a good solution
+
+                    return total_error
+
+                # Initial parameters and bounds
+                initial_params = []
+                bounds = []
+                if fit_center:
+                    initial_params.append(center)
+                    bounds.append((price_min - 30, price_max + 30))
+                if fit_spread:
+                    initial_params.append(spread)
+                    bounds.append((1.0, 50.0))
+                if fit_tails:
+                    initial_params.append(left_tail)
+                    bounds.append((2.5, 20.0))
+                    initial_params.append(right_tail)
+                    bounds.append((2.5, 20.0))
+                if fit_lean:
+                    initial_params.append(lean)
+                    bounds.append((0.5, 2.0))
+
+                if initial_params:  # Only fit if at least one parameter selected
+                    # Try simple optimization first (faster)
+                    from scipy.optimize import minimize
+
+                    # Quick attempt with local optimizer
+                    quick_result = minimize(objective, initial_params, bounds=bounds,
+                                           method='L-BFGS-B', options={'maxiter': 50})
+
+                    # Check if quick solution is good enough
+                    final_error = objective(quick_result.x)
+
+                    if final_error <= TOLERANCE**2 * len(st.session_state.assumptions):
+                        # Good enough! Use this solution
+                        result = quick_result
+                        success = True
+                    else:
+                        # Try harder with global optimization but with fewer iterations
+                        result = differential_evolution(objective, bounds, seed=42,
+                                                      maxiter=30,  # Reduced from 100
+                                                      popsize=10,  # Smaller population
+                                                      tol=TOLERANCE,  # Stop when close enough
+                                                      atol=TOLERANCE)  # Absolute tolerance
+                        success = result.fun <= TOLERANCE**2 * len(st.session_state.assumptions) * 2  # Be more lenient
+
+                    if success:
+                        # Extract fitted parameters
+                        idx = 0
+                        if fit_center:
+                            st.session_state.center = result.x[idx]
+                            idx += 1
+                        if fit_spread:
+                            st.session_state.spread = result.x[idx]
+                            idx += 1
+                        if fit_tails:
+                            st.session_state.left_tail = result.x[idx]
+                            idx += 1
+                            st.session_state.right_tail = result.x[idx]
+                            idx += 1
+                        if fit_lean:
+                            st.session_state.lean = result.x[idx]
+
+                        st.sidebar.success("✓ Distribution fitted successfully!")
+                        st.rerun()
+                    else:
+                        # Check how close we got
+                        if result.fun < 0.05**2 * len(st.session_state.assumptions):
+                            st.sidebar.info("📊 Got reasonably close! Try adjusting fewer parameters.")
+                        else:
+                            st.sidebar.warning("⚠️ Couldn't match assumptions exactly. Try different targets or parameters.")
+                else:
+                    st.sidebar.warning("Please select at least one parameter to fit.")
+
+        # Clear all button
+        if st.sidebar.button("🗑 Clear All Assumptions", use_container_width=True):
+            st.session_state.assumptions = []
+            st.rerun()
+    else:
+        st.sidebar.info("Add assumptions above to fit the distribution")
+
 # Main visualization
 subset = prices[-n_points:]
 subset_dates = dates[-n_points:]
@@ -462,6 +756,56 @@ fig.add_trace(go.Scatter(
     line=dict(color='#FF6B6B', width=1, dash='dash'),
     hovertemplate=f'Your Center: ${center:.2f}<extra></extra>'
 ))
+
+# Show calculated threshold from inverse probability if it exists
+if 'calculated_threshold' in st.session_state:
+    calc_threshold = st.session_state['calculated_threshold']
+    fig.add_trace(go.Scatter(
+        x=[calc_threshold, calc_threshold],
+        y=[0, max(pdf_vals)*1.2],
+        mode='lines',
+        name=f'Calculated: {st.session_state["calc_prob"]*100:.1f}% {st.session_state["calc_dir"].lower()}',
+        line=dict(color='#FFD700', width=3, dash='dash'),
+        hovertemplate=(
+            f'<b>Calculated Threshold: ${calc_threshold:.2f}</b><br>' +
+            f'{st.session_state["calc_prob"]*100:.1f}% chance {st.session_state["calc_dir"].lower()}<extra></extra>'
+        )
+    ))
+
+# Show assumptions if they exist
+if 'assumptions' in st.session_state and st.session_state.assumptions:
+    for i, assumption in enumerate(st.session_state.assumptions):
+        # Calculate actual probability for this assumption
+        x_test = np.linspace(assumption['threshold'], center + 10*spread, 500)
+        pdf_test = skew_t_pdf_asymmetric(x_test, center, spread, left_tail, right_tail, lean)
+        actual_prob = np.trapz(pdf_test, x_test)
+        actual_prob = min(max(actual_prob, 0), 1)
+
+        # Color based on how close we are to target
+        error = abs(actual_prob - assumption['prob_above'])
+        if error < 0.01:
+            color = '#2ECC71'  # Green - good fit
+        elif error < 0.05:
+            color = '#F39C12'  # Orange - okay fit
+        else:
+            color = '#E74C3C'  # Red - poor fit
+
+        fig.add_trace(go.Scatter(
+            x=[assumption['threshold'], assumption['threshold']],
+            y=[0, max(pdf_vals)*0.8],
+            mode='lines+text',
+            name=f'Target {i+1}',
+            line=dict(color=color, width=2, dash='dashdot'),
+            text=[f"{assumption['prob_above']*100:.1f}% (actual: {actual_prob*100:.1f}%)"],
+            textposition='top right',
+            textfont=dict(size=10, color=color),
+            hovertemplate=(
+                f'<b>Assumption {i+1}</b><br>' +
+                f'Target: {assumption["prob_above"]*100:.1f}% above ${assumption["threshold"]:.2f}<br>' +
+                f'Actual: {actual_prob*100:.1f}% above<br>' +
+                f'Error: {error*100:.2f}%<extra></extra>'
+            )
+        ))
 
 # Threshold lines based on type
 if prob_type == "Between Range":
@@ -657,6 +1001,38 @@ with col2:
 
     prob_df = pd.DataFrame(prob_data)
     st.dataframe(prob_df, hide_index=True, use_container_width=True)
+
+# Display assumption validation if any exist
+if 'assumptions' in st.session_state and st.session_state.assumptions:
+    st.markdown("---")
+    st.subheader("🎯 Assumption Validation")
+
+    validation_data = []
+    for i, assumption in enumerate(st.session_state.assumptions):
+        # Calculate actual probability
+        x_test = np.linspace(assumption['threshold'], center + 10*spread, 500)
+        pdf_test = skew_t_pdf_asymmetric(x_test, center, spread, left_tail, right_tail, lean)
+        actual_prob = np.trapz(pdf_test, x_test)
+        actual_prob = min(max(actual_prob, 0), 1)
+
+        error = abs(actual_prob - assumption['prob_above'])
+        status = "✅ Good" if error < 0.01 else "⚠️ OK" if error < 0.05 else "❌ Poor"
+
+        validation_data.append({
+            "Assumption": f"#{i+1}",
+            "Target": f"{assumption['prob_above']*100:.1f}% > ${assumption['threshold']:.1f}",
+            "Actual": f"{actual_prob*100:.1f}%",
+            "Error": f"{error*100:.2f}%",
+            "Status": status
+        })
+
+    validation_df = pd.DataFrame(validation_data)
+    st.dataframe(validation_df, hide_index=True, use_container_width=True)
+
+    # Suggestion if fit is poor
+    max_error = max([abs(float(d['Error'].rstrip('%'))) for d in validation_data], default=0)
+    if max_error > 5:
+        st.info("💡 **Tip**: Use 'Fit Distribution to Assumption' mode to automatically adjust parameters to match your assumptions.")
 
 # Display key probabilities
 if prob_type == "Between Range":
