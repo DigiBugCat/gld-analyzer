@@ -9,18 +9,74 @@ from datetime import datetime, timedelta
 st.set_page_config(
     page_title="GLD Price Distribution Analyzer",
     page_icon="📈",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
 st.title("🏆 GLD (Gold ETF) Price Distribution Analyzer")
 st.markdown("Interactive tool to model your beliefs about GLD price movements using asymmetric fat-tailed distributions")
 
-@st.cache_data(ttl=3600)
-def fetch_gld_data(period='2mo', interval='1h'):
-    """Fetch GLD price data with caching"""
-    ticker = yf.Ticker("GLD")
-    df = ticker.history(period=period, interval=interval)
+def generate_demo_data(period='2mo', interval='1h'):
+    """Generate synthetic GLD-like data for demonstration"""
+    import datetime as dt
+
+    # Map period to days
+    period_map = {'1wk': 7, '2wk': 14, '1mo': 30, '2mo': 60, '3mo': 90, '6mo': 180}
+    days = period_map.get(period, 60)
+
+    # Map interval to data points per day
+    interval_map = {'15m': 26, '30m': 13, '1h': 7, '1d': 1}
+    points_per_day = interval_map.get(interval, 7)
+
+    n_points = days * points_per_day
+
+    # Generate realistic GLD prices around $330 with volatility
+    np.random.seed(42)
+    base_price = 330
+    returns = np.random.normal(0.0001, 0.005, n_points)  # Small positive drift, 0.5% daily vol
+    prices = base_price * np.exp(np.cumsum(returns))
+
+    # Add some structure - trending and mean reversion
+    trend = np.linspace(0, 0.02, n_points)
+    prices = prices * (1 + trend)
+
+    # Create datetime index
+    end_date = pd.Timestamp.now()
+    if interval == '1d':
+        dates = pd.date_range(end=end_date, periods=n_points, freq='D')
+    elif interval == '1h':
+        dates = pd.date_range(end=end_date, periods=n_points, freq='h')
+    elif interval == '30m':
+        dates = pd.date_range(end=end_date, periods=n_points, freq='30min')
+    else:  # 15m
+        dates = pd.date_range(end=end_date, periods=n_points, freq='15min')
+
+    df = pd.DataFrame({
+        'Close': prices,
+        'Open': prices * np.random.uniform(0.998, 1.002, n_points),
+        'High': prices * np.random.uniform(1.001, 1.005, n_points),
+        'Low': prices * np.random.uniform(0.995, 0.999, n_points),
+        'Volume': np.random.uniform(1e6, 5e6, n_points)
+    }, index=dates)
+
     return df
+
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def fetch_gld_data(period='2mo', interval='1h'):
+    """Fetch GLD price data - exact same as Jupyter notebook"""
+    try:
+        # Exact code that works in Jupyter
+        dat = yf.Ticker("GLD")
+        df = dat.history(period=period, interval=interval)
+
+        if not df.empty:
+            return df
+    except Exception as e:
+        st.error(f"Error fetching data: {e}")
+
+    # Fallback to demo data only if real data fails
+    st.warning("⚠️ Unable to fetch live GLD data. Using demo data for demonstration purposes.")
+    return generate_demo_data(period, interval)
 
 def fit_initial_params(prices, n_recent=100):
     """Fit asymmetric t-distribution to get reasonable starting values"""
@@ -263,7 +319,7 @@ for i, x in enumerate(x_range):
     if i == 0:
         cdf_vals.append(0)
     else:
-        prob = np.trapz(pdf_vals[:i+1], x_range[:i+1])
+        prob = np.trapezoid(pdf_vals[:i+1], x_range[:i+1])
         cdf_vals.append(min(prob, 1.0))
 
 cdf_vals = np.array(cdf_vals)
@@ -281,8 +337,10 @@ fig.add_trace(go.Histogram(
     nbinsx=50,
     histnorm='probability density',
     name='Historical Data',
-    opacity=0.6,
-    marker_color='lightblue',
+    opacity=0.7,
+    marker_color='steelblue',
+    marker_line_color='darkblue',
+    marker_line_width=1,
     hovertemplate='Price: $%{x:.2f}<extra></extra>'
 ))
 
@@ -368,6 +426,26 @@ fig.update_layout(
         y=1.02,
         xanchor="right",
         x=1
+    ),
+    template="plotly_white",
+    plot_bgcolor='white',
+    paper_bgcolor='white',
+    font=dict(color='black', size=12),
+    xaxis=dict(
+        showgrid=True,
+        gridwidth=1,
+        gridcolor='lightgray',
+        zeroline=True,
+        zerolinewidth=1,
+        zerolinecolor='gray'
+    ),
+    yaxis=dict(
+        showgrid=True,
+        gridwidth=1,
+        gridcolor='lightgray',
+        zeroline=True,
+        zerolinewidth=1,
+        zerolinecolor='gray'
     )
 )
 

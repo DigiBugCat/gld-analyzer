@@ -16,5 +16,5 @@ echo "Starting GLD Price Distribution Analyzer..."
 echo "Opening browser at http://localhost:8501"
 echo ""
 
-# Run the Streamlit app
-streamlit run gld_app.py
+# Run the Streamlit app with auto-reload enabled
+streamlit run gld_app.py --server.runOnSave true
