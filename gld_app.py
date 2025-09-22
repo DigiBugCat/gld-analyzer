@@ -8,14 +8,11 @@ from datetime import datetime, timedelta
 import time
 
 st.set_page_config(
-    page_title="GLD Price Distribution Analyzer",
+    page_title="Stock Price Distribution Analyzer",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded"
 )
-
-st.title("🏆 GLD (Gold ETF) Price Distribution Analyzer")
-st.markdown("Interactive tool to model your beliefs about GLD price movements using asymmetric fat-tailed distributions")
 
 def generate_demo_data(period='2mo', interval='1h'):
     """Generate synthetic GLD-like data for demonstration"""
@@ -63,28 +60,26 @@ def generate_demo_data(period='2mo', interval='1h'):
     return df
 
 @st.cache_data(ttl=300)  # Cache for 5 minutes
-def fetch_gld_data(period='2mo', interval='1h'):
-    """Fetch GLD price data"""
+def fetch_stock_data(ticker='SPY', period='2mo', interval='1h'):
+    """Fetch stock price data for any ticker"""
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            # Add timeout and better error handling
-            dat = yf.Ticker("GLD")
+            # Validate ticker and fetch data
+            dat = yf.Ticker(ticker)
             df = dat.history(period=period, interval=interval)
 
             if df is not None and len(df) > 0:
-                return df
+                return df, True  # Return data and success flag
 
         except Exception as e:
             if attempt == max_retries - 1:
-                st.error(f"Failed to fetch GLD data after {max_retries} attempts: {str(e)}")
-                st.stop()
+                return pd.DataFrame(), False  # Return empty df and failure flag
             else:
                 time.sleep(1)  # Wait before retry
                 continue
 
-    st.error("Unable to fetch GLD data. Please try refreshing the page.")
-    st.stop()
+    return pd.DataFrame(), False  # Return empty df and failure flag
 
 def fit_initial_params(prices, n_recent=100):
     """Fit asymmetric t-distribution to get reasonable starting values"""
@@ -152,6 +147,22 @@ def skew_t_pdf_asymmetric(x, center, spread, left_tail, right_tail, lean):
     return np.array(pdf_vals)
 
 # Sidebar for controls
+st.sidebar.header("🎯 Stock Selection")
+
+# Ticker input
+default_ticker = "GLD"
+ticker = st.sidebar.text_input(
+    "Enter Stock Ticker Symbol",
+    value=default_ticker,
+    help="Enter any valid stock ticker symbol (e.g., AAPL, MSFT, SPY, GLD)",
+    placeholder="Enter ticker..."
+).upper().strip()
+
+# Validate ticker is not empty
+if not ticker:
+    ticker = default_ticker
+
+st.sidebar.markdown("---")
 st.sidebar.header("⚙️ Configuration")
 
 # Data period selector
@@ -182,19 +193,25 @@ selected_interval = st.sidebar.selectbox(
     index=2  # Default to 1 hour
 )
 
+# Add dynamic title and description
+st.title(f"📈 {ticker} Price Distribution Analyzer")
+st.markdown(f"Interactive tool to model your beliefs about **{ticker}** price movements using asymmetric fat-tailed distributions")
+
 # Fetch data
-with st.spinner('Fetching GLD data...'):
-    try:
-        df = fetch_gld_data(period=period_options[selected_period],
-                           interval=interval_options[selected_interval])
-        if df.empty:
-            st.error("No data received from Yahoo Finance. Please try again later.")
-            st.stop()
-        prices = df['Close'].values
-        dates = df.index
-    except Exception as e:
-        st.error(f"Error fetching data: {str(e)}")
+with st.spinner(f'Fetching {ticker} data...'):
+    df, success = fetch_stock_data(
+        ticker=ticker,
+        period=period_options[selected_period],
+        interval=interval_options[selected_interval]
+    )
+
+    if not success or df.empty:
+        st.error(f"❌ Unable to fetch data for ticker '{ticker}'. Please check if the ticker symbol is valid.")
+        st.info("💡 Try popular tickers like: AAPL, MSFT, GOOGL, AMZN, TSLA, SPY, QQQ, GLD")
         st.stop()
+
+    prices = df['Close'].values
+    dates = df.index
 
 # Calculate initial parameters
 initial_params = fit_initial_params(prices)
@@ -632,7 +649,7 @@ if prob_type == "Between Range":
 
     with col3:
         st.metric(
-            label="Current GLD Price",
+            label=f"Current {ticker} Price",
             value=f"${prices[-1]:.2f}",
             delta=f"Last: {dates[-1].strftime('%H:%M')}"
         )
@@ -662,7 +679,7 @@ else:
 
     with col3:
         st.metric(
-            label="Current GLD Price",
+            label=f"Current {ticker} Price",
             value=f"${prices[-1]:.2f}",
             delta=f"Last: {dates[-1].strftime('%H:%M')}"
         )
