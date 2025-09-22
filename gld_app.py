@@ -351,7 +351,7 @@ for i, x in enumerate(x_range):
     if i == 0:
         cdf_vals.append(0)
     else:
-        prob = np.trapezoid(pdf_vals[:i+1], x_range[:i+1])
+        prob = np.trapz(pdf_vals[:i+1], x_range[:i+1])
         cdf_vals.append(min(prob, 1.0))
 
 cdf_vals = np.array(cdf_vals)
