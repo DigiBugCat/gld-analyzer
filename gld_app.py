@@ -5,6 +5,7 @@ import yfinance as yf
 from scipy import stats
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
+import time
 
 st.set_page_config(
     page_title="GLD Price Distribution Analyzer",
@@ -63,20 +64,27 @@ def generate_demo_data(period='2mo', interval='1h'):
 
 @st.cache_data(ttl=300)  # Cache for 5 minutes
 def fetch_gld_data(period='2mo', interval='1h'):
-    """Fetch GLD price data - exact same as Jupyter notebook"""
-    try:
-        # Exact code that works in Jupyter
-        dat = yf.Ticker("GLD")
-        df = dat.history(period=period, interval=interval)
+    """Fetch GLD price data"""
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            # Add timeout and better error handling
+            dat = yf.Ticker("GLD")
+            df = dat.history(period=period, interval=interval)
 
-        if not df.empty:
-            return df
-    except Exception as e:
-        st.error(f"Error fetching data: {e}")
+            if df is not None and len(df) > 0:
+                return df
 
-    # Fallback to demo data only if real data fails
-    st.warning("⚠️ Unable to fetch live GLD data. Using demo data for demonstration purposes.")
-    return generate_demo_data(period, interval)
+        except Exception as e:
+            if attempt == max_retries - 1:
+                st.error(f"Failed to fetch GLD data after {max_retries} attempts: {str(e)}")
+                st.stop()
+            else:
+                time.sleep(1)  # Wait before retry
+                continue
+
+    st.error("Unable to fetch GLD data. Please try refreshing the page.")
+    st.stop()
 
 def fit_initial_params(prices, n_recent=100):
     """Fit asymmetric t-distribution to get reasonable starting values"""
