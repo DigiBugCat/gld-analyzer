@@ -486,7 +486,7 @@ else:  # Fit Distribution to Assumption mode
 
     # Add new assumption
     st.sidebar.subheader("Add Assumption")
-    col_val, col_prob = st.sidebar.columns(2)
+    col_val, col_dir = st.sidebar.columns(2)
     with col_val:
         new_threshold = st.number_input(
             "Price ($)",
@@ -496,20 +496,28 @@ else:  # Fit Distribution to Assumption mode
             step=0.5,
             key='new_threshold'
         )
-    with col_prob:
-        new_prob = st.number_input(
-            "Prob Above (%)",
-            min_value=0.1,
-            max_value=99.9,
-            value=20.0,
-            step=0.5,
-            key='new_prob'
+    with col_dir:
+        new_direction = st.selectbox(
+            "Direction",
+            ["Above", "Below"],
+            index=0,
+            key='new_direction'
         )
+
+    new_prob = st.sidebar.number_input(
+        f"Probability (%) {new_direction.lower()} ${new_threshold:.1f}",
+        min_value=0.1,
+        max_value=99.9,
+        value=20.0,
+        step=0.5,
+        key='new_prob'
+    )
 
     if st.sidebar.button("➕ Add Assumption", use_container_width=True):
         st.session_state.assumptions.append({
             'threshold': new_threshold,
-            'prob_above': new_prob / 100.0
+            'probability': new_prob / 100.0,
+            'direction': new_direction.lower()
         })
 
     # Display current assumptions
@@ -518,7 +526,7 @@ else:  # Fit Distribution to Assumption mode
         for i, assumption in enumerate(st.session_state.assumptions):
             col1, col2 = st.sidebar.columns([3, 1])
             with col1:
-                st.markdown(f"{assumption['prob_above']*100:.1f}% above ${assumption['threshold']:.1f}")
+                st.markdown(f"{assumption['probability']*100:.1f}% {assumption['direction']} ${assumption['threshold']:.1f}")
             with col2:
                 if st.button("❌", key=f"del_{i}"):
                     st.session_state.assumptions.pop(i)
@@ -543,13 +551,19 @@ else:  # Fit Distribution to Assumption mode
                     for assumption in st.session_state.assumptions:
                         # Check if threshold is within reasonable range
                         if assumption['threshold'] < center - 5*spread or assumption['threshold'] > center + 5*spread:
-                            if assumption['prob_above'] > 0.3:  # Expecting high prob for extreme value
+                            if assumption['direction'] == 'above' and assumption['probability'] > 0.3:
+                                return False
+                            if assumption['direction'] == 'below' and assumption['probability'] < 0.7:
                                 return False
                         # Check for contradictory assumptions
                         for other in st.session_state.assumptions:
-                            if other != assumption:
-                                if other['threshold'] > assumption['threshold'] and other['prob_above'] > assumption['prob_above']:
-                                    return False  # Contradiction: higher threshold should have lower prob_above
+                            if other != assumption and other['direction'] == assumption['direction']:
+                                if assumption['direction'] == 'above':
+                                    if other['threshold'] > assumption['threshold'] and other['probability'] > assumption['probability']:
+                                        return False  # Higher threshold should have lower prob_above
+                                else:  # below
+                                    if other['threshold'] > assumption['threshold'] and other['probability'] < assumption['probability']:
+                                        return False  # Higher threshold should have higher prob_below
                     return True
 
                 if not quick_check():
@@ -571,14 +585,21 @@ else:  # Fit Distribution to Assumption mode
                     max_error = 0
                     total_error = 0
                     for assumption in st.session_state.assumptions:
-                        # Use fewer points for faster calculation
-                        x_range_test = np.linspace(assumption['threshold'], test_center + 10*test_spread, 200)
-                        pdf_vals_test = skew_t_pdf_asymmetric(x_range_test, test_center, test_spread,
-                                                             test_left_tail, test_right_tail, test_lean)
-                        actual_prob_above = np.trapz(pdf_vals_test, x_range_test)
-                        actual_prob_above = min(max(actual_prob_above, 0), 1)
+                        # Calculate probability based on direction
+                        if assumption['direction'] == 'above':
+                            # Use fewer points for faster calculation
+                            x_range_test = np.linspace(assumption['threshold'], test_center + 10*test_spread, 200)
+                            pdf_vals_test = skew_t_pdf_asymmetric(x_range_test, test_center, test_spread,
+                                                                 test_left_tail, test_right_tail, test_lean)
+                            actual_prob = np.trapz(pdf_vals_test, x_range_test)
+                        else:  # below
+                            x_range_test = np.linspace(test_center - 10*test_spread, assumption['threshold'], 200)
+                            pdf_vals_test = skew_t_pdf_asymmetric(x_range_test, test_center, test_spread,
+                                                                 test_left_tail, test_right_tail, test_lean)
+                            actual_prob = np.trapz(pdf_vals_test, x_range_test)
 
-                        error = abs(actual_prob_above - assumption['prob_above'])
+                        actual_prob = min(max(actual_prob, 0), 1)
+                        error = abs(actual_prob - assumption['probability'])
                         max_error = max(max_error, error)
                         total_error += error ** 2
 
@@ -776,13 +797,18 @@ if 'calculated_threshold' in st.session_state:
 if 'assumptions' in st.session_state and st.session_state.assumptions:
     for i, assumption in enumerate(st.session_state.assumptions):
         # Calculate actual probability for this assumption
-        x_test = np.linspace(assumption['threshold'], center + 10*spread, 500)
+        if assumption.get('direction', 'above') == 'above':
+            x_test = np.linspace(assumption['threshold'], center + 10*spread, 500)
+        else:  # below
+            x_test = np.linspace(center - 10*spread, assumption['threshold'], 500)
+
         pdf_test = skew_t_pdf_asymmetric(x_test, center, spread, left_tail, right_tail, lean)
         actual_prob = np.trapz(pdf_test, x_test)
         actual_prob = min(max(actual_prob, 0), 1)
 
         # Color based on how close we are to target
-        error = abs(actual_prob - assumption['prob_above'])
+        target_prob = assumption.get('probability', assumption.get('prob_above', 0))
+        error = abs(actual_prob - target_prob)
         if error < 0.01:
             color = '#2ECC71'  # Green - good fit
         elif error < 0.05:
@@ -790,19 +816,21 @@ if 'assumptions' in st.session_state and st.session_state.assumptions:
         else:
             color = '#E74C3C'  # Red - poor fit
 
+        direction = assumption.get('direction', 'above')
+        target_prob = assumption.get('probability', assumption.get('prob_above', 0))
         fig.add_trace(go.Scatter(
             x=[assumption['threshold'], assumption['threshold']],
             y=[0, max(pdf_vals)*0.8],
             mode='lines+text',
             name=f'Target {i+1}',
             line=dict(color=color, width=2, dash='dashdot'),
-            text=[f"{assumption['prob_above']*100:.1f}% (actual: {actual_prob*100:.1f}%)"],
+            text=[f"{target_prob*100:.1f}% (actual: {actual_prob*100:.1f}%)"],
             textposition='top right',
             textfont=dict(size=10, color=color),
             hovertemplate=(
                 f'<b>Assumption {i+1}</b><br>' +
-                f'Target: {assumption["prob_above"]*100:.1f}% above ${assumption["threshold"]:.2f}<br>' +
-                f'Actual: {actual_prob*100:.1f}% above<br>' +
+                f'Target: {target_prob*100:.1f}% {direction} ${assumption["threshold"]:.2f}<br>' +
+                f'Actual: {actual_prob*100:.1f}% {direction}<br>' +
                 f'Error: {error*100:.2f}%<extra></extra>'
             )
         ))
@@ -1010,17 +1038,25 @@ if 'assumptions' in st.session_state and st.session_state.assumptions:
     validation_data = []
     for i, assumption in enumerate(st.session_state.assumptions):
         # Calculate actual probability
-        x_test = np.linspace(assumption['threshold'], center + 10*spread, 500)
+        direction = assumption.get('direction', 'above')
+        if direction == 'above':
+            x_test = np.linspace(assumption['threshold'], center + 10*spread, 500)
+        else:  # below
+            x_test = np.linspace(center - 10*spread, assumption['threshold'], 500)
+
         pdf_test = skew_t_pdf_asymmetric(x_test, center, spread, left_tail, right_tail, lean)
         actual_prob = np.trapz(pdf_test, x_test)
         actual_prob = min(max(actual_prob, 0), 1)
 
-        error = abs(actual_prob - assumption['prob_above'])
+        target_prob = assumption.get('probability', assumption.get('prob_above', 0))
+        error = abs(actual_prob - target_prob)
         status = "✅ Good" if error < 0.01 else "⚠️ OK" if error < 0.05 else "❌ Poor"
 
+        # Format display based on direction
+        symbol = '>' if direction == 'above' else '<'
         validation_data.append({
             "Assumption": f"#{i+1}",
-            "Target": f"{assumption['prob_above']*100:.1f}% > ${assumption['threshold']:.1f}",
+            "Target": f"{target_prob*100:.1f}% {symbol} ${assumption['threshold']:.1f}",
             "Actual": f"{actual_prob*100:.1f}%",
             "Error": f"{error*100:.2f}%",
             "Status": status
