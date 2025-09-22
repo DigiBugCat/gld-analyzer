@@ -216,6 +216,21 @@ with st.spinner(f'Fetching {ticker} data...'):
 # Calculate initial parameters
 initial_params = fit_initial_params(prices)
 
+# Check if ticker or period has changed
+data_key = f"{ticker}_{selected_period}_{selected_interval}"
+if 'last_data_key' not in st.session_state:
+    st.session_state.last_data_key = data_key
+
+# If data source changed, reset to new fitted values
+if st.session_state.last_data_key != data_key:
+    st.session_state.last_data_key = data_key
+    st.session_state.center = initial_params['center']
+    st.session_state.spread = initial_params['spread']
+    st.session_state.left_tail = initial_params['left_tail']
+    st.session_state.right_tail = initial_params['right_tail']
+    st.session_state.lean = initial_params['lean']
+    st.rerun()  # Force refresh to update sliders
+
 # Parameter definitions expander
 with st.sidebar.expander("📖 Parameter Definitions", expanded=False):
     st.markdown("""
