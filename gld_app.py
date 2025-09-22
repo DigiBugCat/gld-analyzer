@@ -542,8 +542,9 @@ else:  # Fit Distribution to Assumption mode
         # Fit button
         if st.sidebar.button("🎯 Fit Distribution", type="primary", use_container_width=True):
             with st.spinner("Fitting distribution..."):
-                # Tolerance for "close enough" - 3% error is acceptable
-                TOLERANCE = 0.03
+                # Relative tolerance - error can't be more than 10% of stated value
+                # e.g., 10% probability can be 9-11% (±1% absolute)
+                RELATIVE_TOLERANCE = 0.10
 
                 # Quick feasibility check
                 def quick_check():
@@ -582,7 +583,7 @@ else:  # Fit Distribution to Assumption mode
                     idx += 1 if fit_tails else 0
                     test_lean = params[idx] if fit_lean else lean
 
-                    max_error = 0
+                    max_relative_error = 0
                     total_error = 0
                     for assumption in st.session_state.assumptions:
                         # Calculate probability based on direction
@@ -599,12 +600,20 @@ else:  # Fit Distribution to Assumption mode
                             actual_prob = np.trapz(pdf_vals_test, x_range_test)
 
                         actual_prob = min(max(actual_prob, 0), 1)
-                        error = abs(actual_prob - assumption['probability'])
-                        max_error = max(max_error, error)
-                        total_error += error ** 2
 
-                    # Return early if close enough
-                    if max_error <= TOLERANCE:
+                        # Calculate relative error (as fraction of target value)
+                        target = assumption['probability']
+                        if target > 0.01:  # Avoid division by very small numbers
+                            relative_error = abs(actual_prob - target) / target
+                        else:
+                            # For very small probabilities, use absolute error
+                            relative_error = abs(actual_prob - target) * 100
+
+                        max_relative_error = max(max_relative_error, relative_error)
+                        total_error += (actual_prob - target) ** 2
+
+                    # Return early if close enough (within relative tolerance)
+                    if max_relative_error <= RELATIVE_TOLERANCE:
                         return 0  # Signal that we found a good solution
 
                     return total_error
@@ -638,7 +647,7 @@ else:  # Fit Distribution to Assumption mode
                     # Check if quick solution is good enough
                     final_error = objective(quick_result.x)
 
-                    if final_error <= TOLERANCE**2 * len(st.session_state.assumptions):
+                    if final_error == 0:  # Found solution within tolerance
                         # Good enough! Use this solution
                         result = quick_result
                         success = True
@@ -647,9 +656,10 @@ else:  # Fit Distribution to Assumption mode
                         result = differential_evolution(objective, bounds, seed=42,
                                                       maxiter=30,  # Reduced from 100
                                                       popsize=10,  # Smaller population
-                                                      tol=TOLERANCE,  # Stop when close enough
-                                                      atol=TOLERANCE)  # Absolute tolerance
-                        success = result.fun <= TOLERANCE**2 * len(st.session_state.assumptions) * 2  # Be more lenient
+                                                      tol=0.001,  # Small convergence tolerance
+                                                      atol=0.001)  # Absolute tolerance
+                        # Check if we got close enough
+                        success = objective(result.x) == 0
 
                     if success:
                         # Extract fitted parameters
@@ -808,16 +818,23 @@ if 'assumptions' in st.session_state and st.session_state.assumptions:
 
         # Color based on how close we are to target
         target_prob = assumption.get('probability', assumption.get('prob_above', 0))
-        error = abs(actual_prob - target_prob)
-        if error < 0.01:
+        absolute_error = abs(actual_prob - target_prob)
+
+        # Calculate relative error for coloring
+        if target_prob > 0.01:
+            relative_error = absolute_error / target_prob
+        else:
+            relative_error = absolute_error * 100
+
+        # Color based on relative tolerance
+        if relative_error <= 0.10:  # Within 10% of stated value
             color = '#2ECC71'  # Green - good fit
-        elif error < 0.05:
+        elif relative_error <= 0.20:  # Within 20% of stated value
             color = '#F39C12'  # Orange - okay fit
         else:
             color = '#E74C3C'  # Red - poor fit
 
         direction = assumption.get('direction', 'above')
-        target_prob = assumption.get('probability', assumption.get('prob_above', 0))
         fig.add_trace(go.Scatter(
             x=[assumption['threshold'], assumption['threshold']],
             y=[0, max(pdf_vals)*0.8],
@@ -831,7 +848,8 @@ if 'assumptions' in st.session_state and st.session_state.assumptions:
                 f'<b>Assumption {i+1}</b><br>' +
                 f'Target: {target_prob*100:.1f}% {direction} ${assumption["threshold"]:.2f}<br>' +
                 f'Actual: {actual_prob*100:.1f}% {direction}<br>' +
-                f'Error: {error*100:.2f}%<extra></extra>'
+                f'Abs Error: {absolute_error*100:.2f}%<br>' +
+                f'Rel Error: {relative_error*100:.1f}% (tolerance: 10%)<extra></extra>'
             )
         ))
 
@@ -1049,8 +1067,17 @@ if 'assumptions' in st.session_state and st.session_state.assumptions:
         actual_prob = min(max(actual_prob, 0), 1)
 
         target_prob = assumption.get('probability', assumption.get('prob_above', 0))
-        error = abs(actual_prob - target_prob)
-        status = "✅ Good" if error < 0.01 else "⚠️ OK" if error < 0.05 else "❌ Poor"
+        absolute_error = abs(actual_prob - target_prob)
+
+        # Calculate relative error for status
+        if target_prob > 0.01:
+            relative_error = absolute_error / target_prob
+        else:
+            # For very small probabilities, be stricter
+            relative_error = absolute_error * 100
+
+        # Status based on relative tolerance (10% of stated value)
+        status = "✅ Good" if relative_error <= 0.10 else "⚠️ OK" if relative_error <= 0.20 else "❌ Poor"
 
         # Format display based on direction
         symbol = '>' if direction == 'above' else '<'
@@ -1058,7 +1085,8 @@ if 'assumptions' in st.session_state and st.session_state.assumptions:
             "Assumption": f"#{i+1}",
             "Target": f"{target_prob*100:.1f}% {symbol} ${assumption['threshold']:.1f}",
             "Actual": f"{actual_prob*100:.1f}%",
-            "Error": f"{error*100:.2f}%",
+            "Error": f"{absolute_error*100:.2f}%",
+            "Rel Error": f"{relative_error*100:.1f}%",
             "Status": status
         })
 
