@@ -534,6 +534,7 @@ else:  # Fit Distribution to Assumption mode
 
         # Parameters to fit
         st.sidebar.subheader("Parameters to Fit")
+        st.sidebar.caption(f"Fitting uses the displayed {n_points} data points")
         fit_center = st.sidebar.checkbox("Center", value=True, key='fit_center')
         fit_spread = st.sidebar.checkbox("Spread", value=True, key='fit_spread')
         fit_tails = st.sidebar.checkbox("Tail Parameters", value=False, key='fit_tails')
@@ -546,12 +547,23 @@ else:  # Fit Distribution to Assumption mode
                 # e.g., 10% probability can be 9-11% (±1% absolute)
                 RELATIVE_TOLERANCE = 0.10
 
+                # Use the same subset of data that's being displayed
+                subset_for_fit = prices[-n_points:]
+                fitted_params = fit_initial_params(subset_for_fit)
+
+                # Use subset-fitted parameters as starting point
+                center_fit = fitted_params['center']
+                spread_fit = fitted_params['spread']
+                left_tail_fit = fitted_params['left_tail']
+                right_tail_fit = fitted_params['right_tail']
+                lean_fit = fitted_params['lean']
+
                 # Quick feasibility check
                 def quick_check():
                     """Quick check if assumptions are reasonable"""
                     for assumption in st.session_state.assumptions:
                         # Check if threshold is within reasonable range
-                        if assumption['threshold'] < center - 5*spread or assumption['threshold'] > center + 5*spread:
+                        if assumption['threshold'] < center_fit - 5*spread_fit or assumption['threshold'] > center_fit + 5*spread_fit:
                             if assumption['direction'] == 'above' and assumption['probability'] > 0.3:
                                 return False
                             if assumption['direction'] == 'below' and assumption['probability'] < 0.7:
@@ -573,15 +585,15 @@ else:  # Fit Distribution to Assumption mode
                 # Objective function optimized for speed
                 def objective(params):
                     idx = 0
-                    test_center = params[idx] if fit_center else center
+                    test_center = params[idx] if fit_center else center_fit
                     idx += 1 if fit_center else 0
-                    test_spread = params[idx] if fit_spread else spread
+                    test_spread = params[idx] if fit_spread else spread_fit
                     idx += 1 if fit_spread else 0
-                    test_left_tail = params[idx] if fit_tails else left_tail
+                    test_left_tail = params[idx] if fit_tails else left_tail_fit
                     idx += 1 if fit_tails else 0
-                    test_right_tail = params[idx] if fit_tails else right_tail
+                    test_right_tail = params[idx] if fit_tails else right_tail_fit
                     idx += 1 if fit_tails else 0
-                    test_lean = params[idx] if fit_lean else lean
+                    test_lean = params[idx] if fit_lean else lean_fit
 
                     max_relative_error = 0
                     total_error = 0
@@ -618,22 +630,22 @@ else:  # Fit Distribution to Assumption mode
 
                     return total_error
 
-                # Initial parameters and bounds
+                # Initial parameters and bounds (use subset-fitted values)
                 initial_params = []
                 bounds = []
                 if fit_center:
-                    initial_params.append(center)
+                    initial_params.append(center_fit)
                     bounds.append((price_min - 30, price_max + 30))
                 if fit_spread:
-                    initial_params.append(spread)
+                    initial_params.append(spread_fit)
                     bounds.append((1.0, 50.0))
                 if fit_tails:
-                    initial_params.append(left_tail)
+                    initial_params.append(left_tail_fit)
                     bounds.append((2.5, 20.0))
-                    initial_params.append(right_tail)
+                    initial_params.append(right_tail_fit)
                     bounds.append((2.5, 20.0))
                 if fit_lean:
-                    initial_params.append(lean)
+                    initial_params.append(lean_fit)
                     bounds.append((0.5, 2.0))
 
                 if initial_params:  # Only fit if at least one parameter selected
