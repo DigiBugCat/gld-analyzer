@@ -53,3 +53,41 @@ The app will open in your browser at `http://localhost:8501`
 
 - Python 3.8+
 - See `requirements.txt` for package dependencies
+
+## Deployment
+
+### Option 1: Streamlit Community Cloud (Recommended - Free)
+
+1. Push your code to GitHub
+2. Go to [share.streamlit.io](https://share.streamlit.io)
+3. Sign in with GitHub
+4. Click "New app" and select your repository
+5. Set branch as `main` and main file as `gld_app.py`
+6. Click Deploy!
+
+Your app will be live at: `https://[your-username]-gld-[random].streamlit.app`
+
+### Option 2: Heroku
+
+1. Install Heroku CLI
+2. Run:
+```bash
+heroku create your-app-name
+git push heroku main
+```
+
+### Option 3: Railway
+
+1. Connect your GitHub repo to [Railway](https://railway.app)
+2. Railway will auto-detect the Streamlit app and deploy
+
+### Option 4: Local Network
+
+Share on your local network:
+```bash
+streamlit run gld_app.py --server.address 0.0.0.0
+```
+
+## Security Note
+
+The app fetches public market data only. No authentication or sensitive data handling is required.
