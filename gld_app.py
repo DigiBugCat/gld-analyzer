@@ -278,16 +278,48 @@ lean = st.sidebar.slider(
 )
 
 st.sidebar.markdown("---")
-st.sidebar.header("🎯 Probability Threshold")
+st.sidebar.header("🎯 Probability Calculator")
 
-threshold = st.sidebar.slider(
-    "Threshold Price ($)",
-    min_value=price_min - 10,
-    max_value=price_max + 10,
-    value=float(center + 10),
-    step=0.5,
-    key='threshold_slider'
+# Probability type selector
+prob_type = st.sidebar.radio(
+    "Calculate Probability",
+    ["Below Threshold", "Above Threshold", "Show Both", "Between Range"],
+    index=2,
+    help="Choose whether to calculate probability below, above, or between thresholds"
 )
+
+if prob_type == "Between Range":
+    col_low, col_high = st.sidebar.columns(2)
+    with col_low:
+        threshold_low = st.number_input(
+            "Lower Bound ($)",
+            min_value=price_min - 10,
+            max_value=price_max + 10,
+            value=float(center - 5),
+            step=0.5,
+            key='threshold_low'
+        )
+    with col_high:
+        threshold_high = st.number_input(
+            "Upper Bound ($)",
+            min_value=price_min - 10,
+            max_value=price_max + 10,
+            value=float(center + 5),
+            step=0.5,
+            key='threshold_high'
+        )
+    threshold = (threshold_low + threshold_high) / 2  # For compatibility
+else:
+    threshold = st.sidebar.slider(
+        "Threshold Price ($)",
+        min_value=price_min - 10,
+        max_value=price_max + 10,
+        value=float(center + 10),
+        step=0.5,
+        key='threshold_slider'
+    )
+    threshold_low = threshold
+    threshold_high = threshold
 
 # Data points selector
 n_points = st.sidebar.slider(
@@ -324,9 +356,20 @@ for i, x in enumerate(x_range):
 
 cdf_vals = np.array(cdf_vals)
 
-# Calculate probability at threshold
-threshold_idx = np.argmin(np.abs(x_range - threshold))
-prob_below = cdf_vals[threshold_idx]
+# Calculate probabilities
+if prob_type == "Between Range":
+    threshold_low_idx = np.argmin(np.abs(x_range - threshold_low))
+    threshold_high_idx = np.argmin(np.abs(x_range - threshold_high))
+    prob_low = cdf_vals[threshold_low_idx]
+    prob_high = cdf_vals[threshold_high_idx]
+    prob_between = prob_high - prob_low
+    prob_below = prob_low
+    prob_above = 1 - prob_high
+else:
+    threshold_idx = np.argmin(np.abs(x_range - threshold))
+    prob_below = cdf_vals[threshold_idx]
+    prob_above = 1 - prob_below
+    prob_between = 0
 
 # Create plot
 fig = go.Figure()
@@ -338,8 +381,8 @@ fig.add_trace(go.Histogram(
     histnorm='probability density',
     name='Historical Data',
     opacity=0.7,
-    marker_color='steelblue',
-    marker_line_color='darkblue',
+    marker_color='#5DADE2',
+    marker_line_color='#3498DB',
     marker_line_width=1,
     hovertemplate='Price: $%{x:.2f}<extra></extra>'
 ))
@@ -350,7 +393,7 @@ fig.add_trace(go.Scatter(
     y=pdf_vals,
     mode='lines',
     name='Your Belief Distribution',
-    line=dict(color='red', width=3),
+    line=dict(color='#FF6B6B', width=3),
     hovertemplate=(
         '<b>Price: $%{x:.2f}</b><br>' +
         'Probability below: %{customdata[0]:.1%}<br>' +
@@ -366,7 +409,7 @@ fig.add_trace(go.Scatter(
     y=[0, max(pdf_vals)*0.3],
     mode='lines',
     name=f'Historical Mean',
-    line=dict(color='blue', width=1, dash='dash'),
+    line=dict(color='#3498DB', width=1, dash='dash'),
     hovertemplate=f'Historical Mean: ${actual_mean:.2f}<extra></extra>'
 ))
 
@@ -376,48 +419,113 @@ fig.add_trace(go.Scatter(
     y=[0, max(pdf_vals)*0.3],
     mode='lines',
     name=f'Your Center',
-    line=dict(color='red', width=1, dash='dash'),
+    line=dict(color='#FF6B6B', width=1, dash='dash'),
     hovertemplate=f'Your Center: ${center:.2f}<extra></extra>'
 ))
 
-# Threshold line
-fig.add_trace(go.Scatter(
-    x=[threshold, threshold],
-    y=[0, max(pdf_vals)*1.1],
-    mode='lines',
-    name=f'Threshold',
-    line=dict(color='green', width=2, dash='dot'),
-    hovertemplate=(
-        f'<b>Threshold: ${threshold:.2f}</b><br>' +
-        f'Probability below: {prob_below:.1%}<br>' +
-        f'Probability above: {1-prob_below:.1%}<extra></extra>'
-    )
-))
-
-# Shade area below threshold
-x_fill = x_range[x_range <= threshold]
-if len(x_fill) > 0:
-    y_fill = skew_t_pdf_asymmetric(x_fill, center, spread, left_tail, right_tail, lean)
+# Threshold lines based on type
+if prob_type == "Between Range":
+    # Lower threshold line
     fig.add_trace(go.Scatter(
-        x=x_fill,
-        y=y_fill,
-        fill='tozeroy',
-        fillcolor='rgba(0,255,0,0.15)',
-        line=dict(color='rgba(255,255,255,0)'),
-        showlegend=False,
-        hoverinfo='skip'
+        x=[threshold_low, threshold_low],
+        y=[0, max(pdf_vals)*1.1],
+        mode='lines',
+        name=f'Lower Bound',
+        line=dict(color='#2ECC71', width=2, dash='dot'),
+        hovertemplate=f'<b>Lower: ${threshold_low:.2f}</b><extra></extra>'
+    ))
+    # Upper threshold line
+    fig.add_trace(go.Scatter(
+        x=[threshold_high, threshold_high],
+        y=[0, max(pdf_vals)*1.1],
+        mode='lines',
+        name=f'Upper Bound',
+        line=dict(color='#2ECC71', width=2, dash='dot'),
+        hovertemplate=f'<b>Upper: ${threshold_high:.2f}</b><extra></extra>'
+    ))
+    # Shade area between thresholds
+    x_fill = x_range[(x_range >= threshold_low) & (x_range <= threshold_high)]
+    if len(x_fill) > 0:
+        y_fill = skew_t_pdf_asymmetric(x_fill, center, spread, left_tail, right_tail, lean)
+        fig.add_trace(go.Scatter(
+            x=x_fill,
+            y=y_fill,
+            fill='tozeroy',
+            fillcolor='rgba(155, 89, 182, 0.3)',  # Purple for between
+            line=dict(color='rgba(255,255,255,0)'),
+            showlegend=False,
+            hoverinfo='skip',
+            name='P(Between)'
+        ))
+else:
+    # Single threshold line
+    fig.add_trace(go.Scatter(
+        x=[threshold, threshold],
+        y=[0, max(pdf_vals)*1.1],
+        mode='lines',
+        name=f'Threshold',
+        line=dict(color='#2ECC71', width=2, dash='dot'),
+        hovertemplate=(
+            f'<b>Threshold: ${threshold:.2f}</b><br>' +
+            f'Probability below: {prob_below:.1%}<br>' +
+            f'Probability above: {prob_above:.1%}<extra></extra>'
+        )
     ))
 
+    # Shade area based on probability type
+    if prob_type == "Below Threshold" or prob_type == "Show Both":
+        # Shade area below threshold
+        x_fill = x_range[x_range <= threshold]
+        if len(x_fill) > 0:
+            y_fill = skew_t_pdf_asymmetric(x_fill, center, spread, left_tail, right_tail, lean)
+            fig.add_trace(go.Scatter(
+                x=x_fill,
+                y=y_fill,
+                fill='tozeroy',
+                fillcolor='rgba(52, 152, 219, 0.3)',  # Blue for below
+                line=dict(color='rgba(255,255,255,0)'),
+                showlegend=False,
+                hoverinfo='skip',
+                name='P(Below)'
+            ))
+
+    if prob_type == "Above Threshold" or prob_type == "Show Both":
+        # Shade area above threshold
+        x_fill = x_range[x_range >= threshold]
+        if len(x_fill) > 0:
+            y_fill = skew_t_pdf_asymmetric(x_fill, center, spread, left_tail, right_tail, lean)
+            fig.add_trace(go.Scatter(
+                x=x_fill,
+                y=y_fill,
+                fill='tozeroy',
+                fillcolor='rgba(231, 76, 60, 0.3)',  # Red for above
+                line=dict(color='rgba(255,255,255,0)'),
+                showlegend=False,
+                hoverinfo='skip',
+                name='P(Above)'
+            ))
+
+# Dynamic title based on probability type
+if prob_type == "Below Threshold":
+    title_text = f'P(Price < ${threshold:.1f}) = {prob_below:.1%} | Data since {start_date.strftime("%Y-%m-%d %H:%M")}'
+elif prob_type == "Above Threshold":
+    title_text = f'P(Price > ${threshold:.1f}) = {prob_above:.1%} | Data since {start_date.strftime("%Y-%m-%d %H:%M")}'
+elif prob_type == "Between Range":
+    title_text = f'P(${threshold_low:.1f} < Price < ${threshold_high:.1f}) = {prob_between:.1%} | Since {start_date.strftime("%Y-%m-%d %H:%M")}'
+else:  # Show Both
+    title_text = f'P < ${threshold:.1f} = {prob_below:.1%} | P > ${threshold:.1f} = {prob_above:.1%} | Since {start_date.strftime("%Y-%m-%d %H:%M")}'
+
 fig.update_layout(
-    title=f'P(Price < ${threshold:.1f}) = {prob_below:.1%} | Data since {start_date.strftime("%Y-%m-%d %H:%M")}',
+    title=title_text,
     xaxis_title="Price ($)",
     yaxis_title="Probability Density",
     height=600,
     hovermode='x unified',
     hoverlabel=dict(
-        bgcolor="white",
+        bgcolor="rgba(255, 255, 255, 0.9)",
         font_size=12,
-        font_family="Arial"
+        font_family="Arial",
+        font_color="black"
     ),
     showlegend=True,
     legend=dict(
@@ -427,25 +535,22 @@ fig.update_layout(
         xanchor="right",
         x=1
     ),
-    template="plotly_white",
-    plot_bgcolor='white',
-    paper_bgcolor='white',
-    font=dict(color='black', size=12),
+    template="plotly_dark",
     xaxis=dict(
         showgrid=True,
         gridwidth=1,
-        gridcolor='lightgray',
+        gridcolor='rgba(255, 255, 255, 0.1)',
         zeroline=True,
         zerolinewidth=1,
-        zerolinecolor='gray'
+        zerolinecolor='rgba(255, 255, 255, 0.2)'
     ),
     yaxis=dict(
         showgrid=True,
         gridwidth=1,
-        gridcolor='lightgray',
+        gridcolor='rgba(255, 255, 255, 0.1)',
         zeroline=True,
         zerolinewidth=1,
-        zerolinecolor='gray'
+        zerolinecolor='rgba(255, 255, 255, 0.2)'
     )
 )
 
@@ -513,5 +618,57 @@ with col2:
     prob_df = pd.DataFrame(prob_data)
     st.dataframe(prob_df, hide_index=True, use_container_width=True)
 
-# Current price info
-st.info(f"**Current GLD Price**: ${prices[-1]:.2f} | **Last Update**: {dates[-1].strftime('%Y-%m-%d %H:%M')}")
+# Display key probabilities
+if prob_type == "Between Range":
+    col3, col4, col5, col6 = st.columns(4)
+
+    with col3:
+        st.metric(
+            label="Current GLD Price",
+            value=f"${prices[-1]:.2f}",
+            delta=f"Last: {dates[-1].strftime('%H:%M')}"
+        )
+
+    with col4:
+        st.metric(
+            label=f"P(< ${threshold_low:.1f})",
+            value=f"{prob_below:.1%}",
+            delta=None
+        )
+
+    with col5:
+        st.metric(
+            label=f"P(${threshold_low:.1f} - ${threshold_high:.1f})",
+            value=f"{prob_between:.1%}",
+            delta=None
+        )
+
+    with col6:
+        st.metric(
+            label=f"P(> ${threshold_high:.1f})",
+            value=f"{prob_above:.1%}",
+            delta=None
+        )
+else:
+    col3, col4, col5 = st.columns(3)
+
+    with col3:
+        st.metric(
+            label="Current GLD Price",
+            value=f"${prices[-1]:.2f}",
+            delta=f"Last: {dates[-1].strftime('%H:%M')}"
+        )
+
+    with col4:
+        st.metric(
+            label=f"P(Price < ${threshold:.1f})",
+            value=f"{prob_below:.1%}",
+            delta=None
+        )
+
+    with col5:
+        st.metric(
+            label=f"P(Price > ${threshold:.1f})",
+            value=f"{prob_above:.1%}",
+            delta=None
+        )
